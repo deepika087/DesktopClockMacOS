@@ -149,6 +149,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
     }
 
+    @objc func refreshWindows() {
+        // Force the windows to the front of the desktop layer again after unlocking the laptop
+        for window in windows {
+            window.orderFrontRegardless() 
+        }
+    }
+
     // Add a Menu Bar icon so you can control the app
     var statusItem: NSStatusItem?
 
