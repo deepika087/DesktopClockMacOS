@@ -4,7 +4,7 @@ A minimalist, "wallpaper-integrated" analog clock for macOS. This app lives behi
 <img width="1592" height="1043" alt="ScreenshotClockWithApp" src="https://github.com/user-attachments/assets/3b064c14-adcd-4adf-ba24-e28e44ff2d32" />
 
 # ✨ Features
-Wallpaper Illusion: Sits at the .desktopIcon window level (behind apps and icons).
+Wallpaper Illusion: Sits at the .desktopIcon window level (behind apps and icons). Loads automatically on startup and when you unlock your system
 
 Click-Through: Uses ignoresMouseEvents so you can still interact with desktop files "under" the clock.
 
@@ -12,7 +12,7 @@ Multi-Display: Automatically detects all connected monitors and places a clock o
 
 Performance: Uses SwiftUI drawingGroup() and GPU acceleration for smooth rendering.
 
-Minimalist Design: Analog face with hour and minute ticks
+Minimalist Design: Analog face with hour and minute ticks. No distraction because of the seconds hand. Although commented out code already exists. 
 
 # 🛠 Prerequisites
 Mac running macOS 12.0 or later.
