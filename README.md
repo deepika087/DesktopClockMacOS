@@ -1,5 +1,7 @@
 # DesktopClockMacOS
 A minimalist, "wallpaper-integrated" analog clock for macOS. This app lives behind your desktop icons and windows, creating the illusion that the clock is part of your wallpaper. It is multi-monitor aware and optimized for zero-to-low CPU usage.
+<img width="1592" height="1043" alt="ScreenshotClock" src="https://github.com/user-attachments/assets/903a23b7-bf71-4c51-ab16-952ffee2fde6" />
+<img width="1592" height="1043" alt="ScreenshotClockWithApp" src="https://github.com/user-attachments/assets/3b064c14-adcd-4adf-ba24-e28e44ff2d32" />
 
 # ✨ Features
 Wallpaper Illusion: Sits at the .desktopIcon window level (behind apps and icons).
