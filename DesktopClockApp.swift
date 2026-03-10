@@ -115,77 +115,156 @@ class DesktopWindow: NSWindow {
             defer: false
         )
         
-        // This specific level puts it behind all icons/apps but above the wallpaper
-        self.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)))
-        
+        // Let the AppDelegate handle the level (.normal)
         self.backgroundColor = .clear
         self.isOpaque = false
-        self.ignoresMouseEvents = true // Allows you to click items on your desktop
-        self.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        self.ignoresMouseEvents = true
+        self.hidesOnDeactivate = false
+        self.animationBehavior = .none
+        self.isReleasedWhenClosed = false
+        
+        // These are the "glue" that keep the window attached to your wallpaper
+        // across all monitors and virtual desktops (Spaces).
+        self.collectionBehavior = [
+            .canJoinAllSpaces,
+            .stationary,
+            .ignoresCycle,
+            .fullScreenAuxiliary
+        ]
+        
+        // Remove sharingType to allow the Window Server full control
     }
 }
 
 // 4. THE APP DELEGATE (Launches the Window)
 class AppDelegate: NSObject, NSApplicationDelegate {
-    var windows: [DesktopWindow] = [] // Store multiple windows
+    var windows: [DesktopWindow] = []
+    var statusItem: NSStatusItem?
+    var safetyTimer: AnyCancellable?
+    var isScreenLocked = false
+    var needsRefreshOnUnlock = false
+    var forceNextRefresh = false   // bypasses windowsMatchScreens() after unlock+display-change
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Create a window for every connected screen
-        for screen in NSScreen.screens {
-            let desktopWindow = DesktopWindow(contentRect: screen.frame)
-            let contentView = NSHostingView(rootView: AnalogClockView())
-            contentView.wantsLayer = true
-            
-            desktopWindow.contentView = contentView
-            desktopWindow.makeKeyAndOrderFront(nil)
-            
-            // Link window to this specific screen
-            desktopWindow.setFrame(screen.frame, display: true)
-            
-            windows.append(desktopWindow)
-        }
-        
-        setupMenuBar()
         NSApp.setActivationPolicy(.accessory)
+        setupMenuBar()
+        refreshWindows()
+
+        // 1. Listen for hardware changes
+        NotificationCenter.default.addObserver(self, selector: #selector(triggerRefresh),
+                                               name: NSApplication.didChangeScreenParametersNotification, object: nil)
+
+        // 2. Listen for lock/unlock events
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(handleLock),
+                              name: NSNotification.Name("com.apple.screenIsLocked"), object: nil)
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(handleUnlock),
+                              name: NSNotification.Name("com.apple.screenIsUnlocked"), object: nil)
+
+        // 3. Safety Pulse
+        safetyTimer = Timer.publish(every: 10, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in self?.reconcile() }
+    }
+
+    @objc func handleLock() {
+        DispatchQueue.main.async { [weak self] in
+            self?.isScreenLocked = true
+        }
+    }
+
+    @objc func handleUnlock() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isScreenLocked = false
+            if self.needsRefreshOnUnlock {
+                self.needsRefreshOnUnlock = false
+                // Pre-lock windows may look valid (correct frames) but be damaged.
+                // Force an unconditional rebuild to replace them.
+                self.forceNextRefresh = true
+                self.triggerRefresh()
+            } else {
+                self.reconcile()
+            }
+        }
+    }
+
+    func windowsMatchScreens() -> Bool {
+        let screens = NSScreen.screens.filter { $0.visibleFrame.width > 0 && $0.visibleFrame.height > 0 }
+        guard !screens.isEmpty, windows.count == screens.count else { return false }
+        return screens.allSatisfy { screen in
+            windows.contains { $0.isVisible && $0.frame == screen.visibleFrame }
+        }
+    }
+
+    @objc func reconcile() {
+        if !windowsMatchScreens() {
+            refreshWindows()
+        }
+    }
+
+    @objc func triggerRefresh() {
+        guard !isScreenLocked else {
+            needsRefreshOnUnlock = true
+            return
+        }
+        NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(refreshWindows), object: nil)
+        self.perform(#selector(refreshWindows), with: nil, afterDelay: 2.0)
     }
 
     @objc func refreshWindows() {
-        // Force the windows to the front of the desktop layer again after unlocking the laptop
-        for window in windows {
-            window.orderFrontRegardless() 
+        let screens = NSScreen.screens.filter { $0.visibleFrame.width > 0 && $0.visibleFrame.height > 0 }
+        guard !screens.isEmpty else { return }
+
+        let force = forceNextRefresh
+        forceNextRefresh = false
+
+        if !force && windowsMatchScreens() {
+            return
         }
+
+        // Build new windows first, then atomically swap.
+        // This prevents a gap where no windows exist if screens are in a transient state.
+        var newWindows: [DesktopWindow] = []
+        for screen in screens {
+            let rect = screen.visibleFrame
+            let dw = DesktopWindow(contentRect: rect)
+            let cv = NSHostingView(rootView: AnalogClockView())
+            cv.wantsLayer = true
+            dw.contentView = cv
+            dw.setFrame(rect, display: true)
+            dw.level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopIconWindow)) + 1)
+            dw.orderFront(nil)
+            newWindows.append(dw)
+        }
+
+        // Only tear down old windows after new ones are ready
+        for window in windows {
+            window.orderOut(nil)
+            window.close()
+        }
+        windows = newWindows
     }
-
-    // Add a Menu Bar icon so you can control the app
-    var statusItem: NSStatusItem?
-
+    
     func setupMenuBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "clock", accessibilityDescription: "Clock")
+            button.image = NSImage(systemSymbolName: "clock.fill", accessibilityDescription: "Clock")
         }
-
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Force Refresh", action: #selector(refreshWindows), keyEquivalent: "r"))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit Desktop Clock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
-        
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem?.menu = menu
-    }
-
-    @objc func toggleLaunchAtLogin() {
-        // Note: For a local app, the easiest way is adding it to System Settings
-        // after exporting (see Step 3). This menu item serves as a reminder!
     }
 }
 
 // 5. THE MAIN ENTRY POINT
 @main
 struct DesktopClockApp: App {
+    // We use the AppDelegate to handle the complex window logic
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // Required for SwiftUI App lifecycle, but we use AppDelegate for the window
         Settings { EmptyView() }
     }
 }
